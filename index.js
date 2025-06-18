@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const mysql = require('mysql2/promise');
+const bcrypt = require('bcrypt');
 
 const PORT = 3000;
 
@@ -52,6 +53,29 @@ async function updateListItem(id, newText) {
     }
 }
 
+// --- Регистрация пользователя ---
+async function registerUser(username, password) {
+    const connection = await mysql.createConnection(dbConfig);
+    const passwordHash = await bcrypt.hash(password, 10);
+    const query = 'INSERT INTO users (username, password_hash) VALUES (?, ?)';
+    await connection.execute(query, [username, passwordHash]);
+    await connection.end();
+}
+
+// --- Аутентификация пользователя ---
+async function authenticateUser(username, password) {
+    const connection = await mysql.createConnection(dbConfig);
+    const query = 'SELECT * FROM users WHERE username = ?';
+    const [rows] = await connection.execute(query, [username]);
+    await connection.end();
+
+    if (rows.length === 0) return false;
+
+    const user = rows[0];
+    const match = await bcrypt.compare(password, user.password_hash);
+    return match ? user : false;
+}
+
   async function retrieveListItems() {
     try {
       // Create a connection to the database
@@ -90,23 +114,48 @@ async function getHtmlRows() {
     `).join('');
 }
 
+function parseCookies(req) {
+    const cookieHeader = req.headers.cookie || '';
+    return Object.fromEntries(cookieHeader.split(';').map(c => c.trim().split('=')));
+}
+
 // Modified request handler with template replacement
 async function handleRequest(req, res) {
-    if (req.url === '/' && req.method === 'GET') {
+    const cookies = parseCookies(req);
+    const isAuthenticated = cookies.userId !== undefined;
+   if (req.url === '/' && req.method === 'GET') {
+    if (!isAuthenticated) {
+        res.writeHead(302, { Location: '/login.html' });
+        res.end();
+        return;
+    }
+
+    try {
+        const html = await fs.promises.readFile(
+            path.join(__dirname, 'index.html'), 
+            'utf8'
+        );
+        
+        const processedHtml = html.replace('{{rows}}', await getHtmlRows());
+        
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(processedHtml);
+    } catch (err) {
+        console.error(err);
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Error loading index.html');
+    }
+    } else if (req.url === '/login.html' && req.method === 'GET') {
         try {
             const html = await fs.promises.readFile(
-                path.join(__dirname, 'index.html'), 
+                path.join(__dirname, 'login.html'), 
                 'utf8'
             );
-            
-            const processedHtml = html.replace('{{rows}}', await getHtmlRows());
-            
             res.writeHead(200, { 'Content-Type': 'text/html' });
-            res.end(processedHtml);
+            res.end(html);
         } catch (err) {
-            console.error(err);
-            res.writeHead(500, { 'Content-Type': 'text/plain' });
-            res.end('Error loading index.html');
+            res.writeHead(500);
+            res.end('Error loading login.html');
         }
     } else if (req.url === '/add-item' && req.method === 'POST') {
         let body = '';
@@ -159,6 +208,62 @@ async function handleRequest(req, res) {
             res.end(JSON.stringify({ success: false, error: error.message }));
         }
     });
+    } else if (req.url === '/register' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk.toString());
+    req.on('end', async () => {
+        const { username, password } = JSON.parse(body);
+        try {
+            await registerUser(username, password);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+        } catch (err) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message }));
+        }
+    });
+    } else if (req.url.startsWith('/login') && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk.toString());
+    req.on('end', async () => {
+        const { username, password } = JSON.parse(body);
+        try {
+            const user = await authenticateUser(username, password);
+            if (user) {
+                res.writeHead(200, {
+                    'Content-Type': 'application/json',
+                    'Set-Cookie': `userId=${user.id}; Path=/; HttpOnly`
+                });
+                res.end(JSON.stringify({ success: true }));
+            } else {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, message: 'Invalid credentials' }));
+            }
+        } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message }));
+        }
+    });
+    } else if (req.url === '/logout' && req.method === 'POST') {
+        res.writeHead(302, {
+            'Set-Cookie': 'userId=; Max-Age=0; Path=/; HttpOnly',
+            'Location': '/login.html'
+        });
+        res.end();
+    } else if (req.method === 'GET') {
+        const filePath = path.join(__dirname, req.url.slice(1));
+        if (fs.existsSync(filePath)) {
+            const ext = path.extname(filePath);
+            const mime = {
+                '.html': 'text/html',
+                '.css': 'text/css',
+                '.js': 'application/javascript',
+            }[ext] || 'text/plain';
+
+            const content = await fs.promises.readFile(filePath);
+            res.writeHead(200, { 'Content-Type': mime });
+            res.end(content);
+        }
     } else {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         res.end('Route not found');

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Register</title>
+</head>
+<body>
+    <h1>Регистрация</h1>
+    <form onsubmit="register(event)">
+        <input type="text" name="username" placeholder="Логин" required>
+        <input type="password" name="password" placeholder="Пароль" required>
+        <button type="submit">Зарегистрироваться</button>
+    </form>
+    <script>
+        async function register(event) {
+            event.preventDefault();
+            const form = event.target;
+            const data = {
+                username: form.username.value,
+                password: form.password.value
+            };
+            const res = await fetch('/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            const result = await res.json();
+            alert(result.success ? 'OK' : result.error);
+        }
+    </script>
+</body>
+</html>
