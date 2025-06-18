@@ -64,10 +64,10 @@ async function deleteListItem(id) {
 // Stub function for generating HTML rows
 async function getHtmlRows() {
     const todoItems = await retrieveListItems();
-
-    return todoItems.map(item => `
+    
+    return todoItems.map((item, index) => `
         <tr>
-            <td>${item.id}</td>
+            <td>${index + 1}</td> <!-- Порядковый номер вместо ID -->
             <td>${item.text}</td>
             <td><button onclick="removeItem(${item.id})">×</button></td>
         </tr>
