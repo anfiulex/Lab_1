@@ -41,6 +41,22 @@
             width: 20%;
         }
     </style>
+    <style>
+        /* Добавьте эти новые стили */
+        .edit-input {
+            width: 100%;
+            padding: 5px;
+            box-sizing: border-box;
+        }
+        .edit-btn {
+            background-color: #4CAF50;
+            color: white;
+            margin-right: 5px;
+        }
+        button {
+            cursor: pointer;
+        }
+    </style>
 </head>
 <body>
 
@@ -65,6 +81,7 @@
 </div>
 
 <script>
+    // Функция добавления элемента (оставляем как есть)
     async function addItem() {
         const newItemInput = document.getElementById('newItem');
         const newItemText = newItemInput.value.trim();
@@ -81,40 +98,86 @@
                 
                 const result = await response.json();
                 if (result.success) {
-                    location.reload(); // Перезагружаем страницу для отображения нового элемента
-                } else {
-                    alert('Error adding item');
+                    location.reload();
                 }
             } catch (error) {
-                console.error('Error:', error);
-                alert('Failed to add item');
+                alert('Не удалось добавить элемент');
             }
         }
     }
 
+    // Функция удаления (оставляем как есть)
     async function removeItem(id) {
-    if (confirm('Вы уверены, что хотите удалить этот элемент?')) {
+        if (confirm('Удалить элемент?')) {
+            try {
+                const response = await fetch('/delete-item', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ id })
+                });
+                if ((await response.json()).success) {
+                    location.reload();
+                }
+            } catch (error) {
+                alert('Не удалось удалить элемент');
+            }
+        }
+    }
+
+    // ===== НОВЫЕ ФУНКЦИИ ДЛЯ РЕДАКТИРОВАНИЯ =====
+    function enableEdit(id, currentText) {
+        const row = document.querySelector(`tr[data-id="${id}"]`);
+        if (!row) return;
+
+        // Заменяем текст на поле ввода
+        row.cells[1].innerHTML = `
+            <input type="text" 
+                   class="edit-input" 
+                   value="${currentText.replace(/"/g, '&quot;')}" 
+                   id="edit-input-${id}">
+        `;
+        
+        // Заменяем кнопки на "Сохранить" и "Отмена"
+        row.cells[2].innerHTML = `
+            <button onclick="saveEdit(${id})" class="edit-btn">✓</button>
+            <button onclick="cancelEdit(${id}, '${currentText.replace(/'/g, "\\'")}')">×</button>
+        `;
+    }
+
+    async function saveEdit(id) {
+        const newText = document.getElementById(`edit-input-${id}`).value.trim();
+        if (!newText) return;
+
         try {
-            const response = await fetch('/delete-item', {
+            const response = await fetch('/update-item', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ id })
+                body: JSON.stringify({ id, newText })
             });
             
-            const result = await response.json();
-            if (result.success) {
-                location.reload(); // Перезагружаем страницу
-            } else {
-                alert('Ошибка при удалении элемента');
+            if ((await response.json()).success) {
+                location.reload();
             }
         } catch (error) {
-            console.error('Error:', error);
-            alert('Не удалось удалить элемент');
+            alert('Не удалось обновить элемент');
         }
     }
-}
+
+    function cancelEdit(id, originalText) {
+        const row = document.querySelector(`tr[data-id="${id}"]`);
+        if (row) {
+            // Возвращаем исходный текст и кнопки
+            row.cells[1].textContent = originalText;
+            row.cells[2].innerHTML = `
+                <button onclick="enableEdit(${id}, '${originalText.replace(/'/g, "\\'")}')">✎</button>
+                <button onclick="removeItem(${id})">×</button>
+            `;
+        }
+    }
 </script>
 
 </body>

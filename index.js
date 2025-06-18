@@ -39,6 +39,19 @@ async function deleteListItem(id) {
     }
 }
 
+async function updateListItem(id, newText) {
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        const query = 'UPDATE items SET text = ? WHERE id = ?';
+        const [result] = await connection.execute(query, [newText, id]);
+        await connection.end();
+        return result.affectedRows > 0;
+    } catch (error) {
+        console.error('Error updating item:', error);
+        throw error;
+    }
+}
+
   async function retrieveListItems() {
     try {
       // Create a connection to the database
@@ -66,10 +79,13 @@ async function getHtmlRows() {
     const todoItems = await retrieveListItems();
     
     return todoItems.map((item, index) => `
-        <tr>
-            <td>${index + 1}</td> <!-- Порядковый номер вместо ID -->
+        <tr data-id="${item.id}">
+            <td>${index + 1}</td>
             <td>${item.text}</td>
-            <td><button onclick="removeItem(${item.id})">×</button></td>
+            <td>
+                <button onclick="enableEdit(${item.id}, '${item.text.replace(/'/g, "\\'")}')">✎</button>
+                <button onclick="removeItem(${item.id})">×</button>
+            </td>
         </tr>
     `).join('');
 }
@@ -126,6 +142,23 @@ async function handleRequest(req, res) {
                 res.end(JSON.stringify({ success: false, error: error.message }));
             }
         });
+    } else if (req.url === '/update-item' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => {
+        body += chunk.toString();
+    });
+    req.on('end', async () => {
+        try {
+            const { id, newText } = JSON.parse(body);
+            const success = await updateListItem(id, newText);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success }));
+        } catch (error) {
+            console.error('Error updating item:', error);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: error.message }));
+        }
+    });
     } else {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         res.end('Route not found');
