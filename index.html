@@ -93,9 +93,28 @@
     }
 
     async function removeItem(id) {
-        // Реализацию удаления добавим позже
-        console.log('Remove item with id:', id);
+    if (confirm('Вы уверены, что хотите удалить этот элемент?')) {
+        try {
+            const response = await fetch('/delete-item', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ id })
+            });
+            
+            const result = await response.json();
+            if (result.success) {
+                location.reload(); // Перезагружаем страницу
+            } else {
+                alert('Ошибка при удалении элемента');
+            }
+        } catch (error) {
+            console.error('Error:', error);
+            alert('Не удалось удалить элемент');
+        }
     }
+}
 </script>
 
 </body>

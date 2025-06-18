@@ -26,6 +26,19 @@ const dbConfig = {
     }
 }
 
+async function deleteListItem(id) {
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        const query = 'DELETE FROM items WHERE id = ?';
+        const [result] = await connection.execute(query, [id]);
+        await connection.end();
+        return result.affectedRows > 0;
+    } catch (error) {
+        console.error('Error deleting list item:', error);
+        throw error;
+    }
+}
+
   async function retrieveListItems() {
     try {
       // Create a connection to the database
@@ -92,6 +105,23 @@ async function handleRequest(req, res) {
                 res.end(JSON.stringify({ success: true }));
             } catch (error) {
                 console.error('Error adding item:', error);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: error.message }));
+            }
+        });
+    } else if (req.url === '/delete-item' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+        req.on('end', async () => {
+            try {
+                const { id } = JSON.parse(body);
+                const success = await deleteListItem(id);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success }));
+            } catch (error) {
+                console.error('Error deleting item:', error);
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: error.message }));
             }
