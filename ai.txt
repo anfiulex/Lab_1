@@ -1,2 +1,294 @@
-супер, всё работает корректно!
-теперь реализуй редактирование элементов в списке
+я реализовал авторизацию в проекте https://github.com/anfiulex/Lab_1
+Это todo list
+я хочу теперь добавить чтобы задачи были разделены по пользователям т.е. пользователь может увидеть только свои задачи
+вот index js
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const mysql = require('mysql2/promise');
+const bcrypt = require('bcrypt');
+
+const PORT = 3000;
+
+// Database connection settings
+const dbConfig = {
+    host: 'localhost',
+    user: 'Anfisa',
+    password: 'juju2025Fisa',
+    database: 'todolist',
+  };
+
+  async function addListItem(text) {
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        const query = 'INSERT INTO items (text) VALUES (?)';
+        const [result] = await connection.execute(query, [text]);
+        await connection.end();
+        return result.insertId;
+    } catch (error) {
+        console.error('Error adding list item:', error);
+        throw error;
+    }
+}
+
+async function deleteListItem(id) {
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        const query = 'DELETE FROM items WHERE id = ?';
+        const [result] = await connection.execute(query, [id]);
+        await connection.end();
+        return result.affectedRows > 0;
+    } catch (error) {
+        console.error('Error deleting list item:', error);
+        throw error;
+    }
+}
+
+async function updateListItem(id, newText) {
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        const query = 'UPDATE items SET text = ? WHERE id = ?';
+        const [result] = await connection.execute(query, [newText, id]);
+        await connection.end();
+        return result.affectedRows > 0;
+    } catch (error) {
+        console.error('Error updating item:', error);
+        throw error;
+    }
+}
+
+// --- Регистрация пользователя ---
+async function registerUser(username, password) {
+    const connection = await mysql.createConnection(dbConfig);
+    const passwordHash = await bcrypt.hash(password, 10);
+    const query = 'INSERT INTO users (username, password_hash) VALUES (?, ?)';
+    await connection.execute(query, [username, passwordHash]);
+    await connection.end();
+}
+
+// --- Аутентификация пользователя ---
+async function authenticateUser(username, password) {
+    const connection = await mysql.createConnection(dbConfig);
+    const query = 'SELECT * FROM users WHERE username = ?';
+    const [rows] = await connection.execute(query, [username]);
+    await connection.end();
+
+    if (rows.length === 0) return false;
+
+    const user = rows[0];
+    const match = await bcrypt.compare(password, user.password_hash);
+    return match ? user : false;
+}
+
+  async function retrieveListItems() {
+    try {
+      // Create a connection to the database
+      const connection = await mysql.createConnection(dbConfig);
+      
+      // Query to select all items from the database
+      const query = 'SELECT id, text FROM items';
+      
+      // Execute the query
+      const [rows] = await connection.execute(query);
+      
+      // Close the connection
+      await connection.end();
+      
+      // Return the retrieved items as a JSON array
+      return rows;
+    } catch (error) {
+      console.error('Error retrieving list items:', error);
+      throw error; // Re-throw the error
+    }
+  }
+
+// Stub function for generating HTML rows
+async function getHtmlRows() {
+    const todoItems = await retrieveListItems();
+    
+    return todoItems.map((item, index) => `
+        <tr data-id="${item.id}">
+            <td>${index + 1}</td>
+            <td>${item.text}</td>
+            <td>
+                <button onclick="enableEdit(${item.id}, '${item.text.replace(/'/g, "\\'")}')">✎</button>
+                <button onclick="removeItem(${item.id})">×</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function parseCookies(req) {
+    const cookieHeader = req.headers.cookie || '';
+    return Object.fromEntries(cookieHeader.split(';').map(c => c.trim().split('=')));
+}
+
+
+// Modified request handler with template replacement
+async function handleRequest(req, res) {
+    const cookies = parseCookies(req);
+    const isAuthenticated = cookies.userId !== undefined;
+   if (req.url === '/' && req.method === 'GET') {
+    if (!isAuthenticated) {
+        res.writeHead(302, { Location: '/login.html' });
+        res.end();
+        return;
+    }
+
+    try {
+        const html = await fs.promises.readFile(
+            path.join(__dirname, 'index.html'), 
+            'utf8'
+        );
+        
+        const processedHtml = html.replace('{{rows}}', await getHtmlRows());
+        
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(processedHtml);
+    } catch (err) {
+        console.error(err);
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Error loading index.html');
+    }
+    } else if (req.url === '/login.html' && req.method === 'GET') {
+        try {
+            const html = await fs.promises.readFile(
+                path.join(__dirname, 'login.html'), 
+                'utf8'
+            );
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end(html);
+        } catch (err) {
+            res.writeHead(500);
+            res.end('Error loading login.html');
+        }
+    } else if (req.url === '/add-item' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+        req.on('end', async () => {
+            try {
+                const { text } = JSON.parse(body);
+                await addListItem(text);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true }));
+            } catch (error) {
+                console.error('Error adding item:', error);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: error.message }));
+            }
+        });
+    } else if (req.url === '/delete-item' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+        req.on('end', async () => {
+            try {
+                const { id } = JSON.parse(body);
+                const success = await deleteListItem(id);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success }));
+            } catch (error) {
+                console.error('Error deleting item:', error);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: error.message }));
+            }
+        });
+    } else if (req.url === '/update-item' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => {
+        body += chunk.toString();
+    });
+    req.on('end', async () => {
+        try {
+            const { id, newText } = JSON.parse(body);
+            const success = await updateListItem(id, newText);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success }));
+        } catch (error) {
+            console.error('Error updating item:', error);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: error.message }));
+        }
+    });
+    } else if (req.url === '/register' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk.toString());
+    req.on('end', async () => {
+        const { username, password } = JSON.parse(body);
+        try {
+            await registerUser(username, password);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+        } catch (err) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message }));
+        }
+    });
+
+    } else if (req.url.startsWith('/login') && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk.toString());
+    req.on('end', async () => {
+        const { username, password } = JSON.parse(body);
+        try {
+            const user = await authenticateUser(username, password);
+            if (user) {
+                res.writeHead(200, {
+                    'Content-Type': 'application/json',
+                    'Set-Cookie': `userId=${user.id}; Path=/; HttpOnly`
+                });
+                res.end(JSON.stringify({ success: true }));
+            } else {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, message: 'Invalid credentials' }));
+            }
+        } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message }));
+        }
+    });
+    } else if (req.url === '/logout' && req.method === 'POST') {
+        res.writeHead(302, {
+            'Set-Cookie': 'userId=; Max-Age=0; Path=/; HttpOnly',
+            'Location': '/login.html'
+        });
+        res.end();
+    } else if (req.method === 'GET') {
+        const filePath = path.join(__dirname, req.url.slice(1));
+        if (fs.existsSync(filePath)) {
+            const ext = path.extname(filePath);
+            const mime = {
+                '.html': 'text/html',
+                '.css': 'text/css',
+                '.js': 'application/javascript',
+            }[ext] || 'text/plain';
+
+            const content = await fs.promises.readFile(filePath);
+            res.writeHead(200, { 'Content-Type': mime });
+            res.end(content);
+        }
+    } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Route not found');
+    }
+}
+
+// Create and start server
+const server = http.createServer(handleRequest);
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));вот как настроена бд
+CREATE DATABASE IF NOT EXISTS todolist;
+USE todolist;
+
+CREATE TABLE IF NOT EXISTS items (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    text VARCHAR(255) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL
+);
