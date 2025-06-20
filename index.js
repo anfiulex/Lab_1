@@ -1,7 +1,6 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const url = require('url'); // <-- добавь эту строку
 const mysql = require('mysql2/promise');
 const bcrypt = require('bcrypt');
 
@@ -15,11 +14,11 @@ const dbConfig = {
     database: 'todolist',
   };
 
-  async function addListItem(userId, text) {
+  async function addListItem(text) {
     try {
         const connection = await mysql.createConnection(dbConfig);
-        const query = 'INSERT INTO items (user_id, text) VALUES (?, ?)';
-        const [result] = await connection.execute(query, [userId, text]);
+        const query = 'INSERT INTO items (text) VALUES (?)';
+        const [result] = await connection.execute(query, [text]);
         await connection.end();
         return result.insertId;
     } catch (error) {
@@ -28,11 +27,11 @@ const dbConfig = {
     }
 }
 
-async function deleteListItem(userId, id) {
+async function deleteListItem(id) {
     try {
         const connection = await mysql.createConnection(dbConfig);
-        const query = 'DELETE FROM items WHERE id = ? AND user_id = ?';
-        const [result] = await connection.execute(query, [id, userId]);
+        const query = 'DELETE FROM items WHERE id = ?';
+        const [result] = await connection.execute(query, [id]);
         await connection.end();
         return result.affectedRows > 0;
     } catch (error) {
@@ -41,11 +40,11 @@ async function deleteListItem(userId, id) {
     }
 }
 
-async function updateListItem(userId, id, newText) {
+async function updateListItem(id, newText) {
     try {
         const connection = await mysql.createConnection(dbConfig);
-        const query = 'UPDATE items SET text = ? WHERE id = ? AND user_id = ?';
-        const [result] = await connection.execute(query, [newText, id, userId]);
+        const query = 'UPDATE items SET text = ? WHERE id = ?';
+        const [result] = await connection.execute(query, [newText, id]);
         await connection.end();
         return result.affectedRows > 0;
     } catch (error) {
@@ -77,22 +76,32 @@ async function authenticateUser(username, password) {
     return match ? user : false;
 }
 
-  async function retrieveListItems(userId) {
+  async function retrieveListItems() {
     try {
-        const connection = await mysql.createConnection(dbConfig);
-        const query = 'SELECT id, text FROM items WHERE user_id = ?';
-        const [rows] = await connection.execute(query, [userId]);
-        await connection.end();
-        return rows;
+      // Create a connection to the database
+      const connection = await mysql.createConnection(dbConfig);
+      
+      // Query to select all items from the database
+      const query = 'SELECT id, text FROM items';
+      
+      // Execute the query
+      const [rows] = await connection.execute(query);
+      
+      // Close the connection
+      await connection.end();
+      
+      // Return the retrieved items as a JSON array
+      return rows;
     } catch (error) {
-        console.error('Error retrieving list items:', error);
-        throw error;
+      console.error('Error retrieving list items:', error);
+      throw error; // Re-throw the error
     }
-}
+  }
 
 // Stub function for generating HTML rows
-async function getHtmlRows(userId) {
-    const todoItems = await retrieveListItems(userId);
+async function getHtmlRows() {
+    const todoItems = await retrieveListItems();
+    
     return todoItems.map((item, index) => `
         <tr data-id="${item.id}">
             <td>${index + 1}</td>
@@ -112,78 +121,152 @@ function parseCookies(req) {
 
 // Modified request handler with template replacement
 async function handleRequest(req, res) {
-    const parsedUrl = url.parse(req.url, true);
-    const pathname = parsedUrl.pathname;
     const cookies = parseCookies(req);
-    const userId = parseInt(cookies.userId); // <--- userId из cookies
-
-    if (!userId) {
+    const isAuthenticated = cookies.userId !== undefined;
+   if (req.url === '/' && req.method === 'GET') {
+    if (!isAuthenticated) {
         res.writeHead(302, { Location: '/login.html' });
         res.end();
         return;
     }
 
-    if (pathname === '/') {
-        const html = fs.readFileSync('./public/index.html', 'utf8');
-        const processedHtml = html.replace('{{rows}}', await getHtmlRows(userId)); // передаём userId
+    try {
+        const html = await fs.promises.readFile(
+            path.join(__dirname, 'index.html'), 
+            'utf8'
+        );
+        
+        const processedHtml = html.replace('{{rows}}', await getHtmlRows());
+        
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(processedHtml);
-
-    } else if (pathname === '/add-item' && req.method === 'POST') {
+    } catch (err) {
+        console.error(err);
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Error loading index.html');
+    }
+    } else if (req.url === '/login.html' && req.method === 'GET') {
+        try {
+            const html = await fs.promises.readFile(
+                path.join(__dirname, 'login.html'), 
+                'utf8'
+            );
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end(html);
+        } catch (err) {
+            res.writeHead(500);
+            res.end('Error loading login.html');
+        }
+    } else if (req.url === '/add-item' && req.method === 'POST') {
         let body = '';
-        req.on('data', chunk => body += chunk);
-        req.on('end', async () => {
-            const { text } = JSON.parse(body);
-            await addListItem(userId, text); // передаём userId
-            res.writeHead(200);
-            res.end();
+        req.on('data', chunk => {
+            body += chunk.toString();
         });
-
-    } else if (pathname === '/delete-item' && req.method === 'POST') {
+        req.on('end', async () => {
+            try {
+                const { text } = JSON.parse(body);
+                await addListItem(text);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true }));
+            } catch (error) {
+                console.error('Error adding item:', error);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: error.message }));
+            }
+        });
+    } else if (req.url === '/delete-item' && req.method === 'POST') {
         let body = '';
-        req.on('data', chunk => body += chunk);
-        req.on('end', async () => {
-            const { id } = JSON.parse(body);
-            const success = await deleteListItem(userId, id); // передаём userId
-            res.writeHead(success ? 200 : 404);
-            res.end();
+        req.on('data', chunk => {
+            body += chunk.toString();
         });
-
-    } else if (pathname === '/update-item' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk);
         req.on('end', async () => {
-            const { id, text } = JSON.parse(body);
-            const success = await updateListItem(userId, id, text); // передаём userId
-            res.writeHead(success ? 200 : 404);
-            res.end();
+            try {
+                const { id } = JSON.parse(body);
+                const success = await deleteListItem(id);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success }));
+            } catch (error) {
+                console.error('Error deleting item:', error);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: error.message }));
+            }
         });
-
-    } else if (pathname === '/logout') {
+    } else if (req.url === '/update-item' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => {
+        body += chunk.toString();
+    });
+    req.on('end', async () => {
+        try {
+            const { id, newText } = JSON.parse(body);
+            const success = await updateListItem(id, newText);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success }));
+        } catch (error) {
+            console.error('Error updating item:', error);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: error.message }));
+        }
+    });
+    } else if (req.url === '/register' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk.toString());
+    req.on('end', async () => {
+        const { username, password } = JSON.parse(body);
+        try {
+            await registerUser(username, password);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+        } catch (err) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message }));
+        }
+    });
+    } else if (req.url.startsWith('/login') && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk.toString());
+    req.on('end', async () => {
+        const { username, password } = JSON.parse(body);
+        try {
+            const user = await authenticateUser(username, password);
+            if (user) {
+                res.writeHead(200, {
+                    'Content-Type': 'application/json',
+                    'Set-Cookie': `userId=${user.id}; Path=/; HttpOnly`
+                });
+                res.end(JSON.stringify({ success: true }));
+            } else {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, message: 'Invalid credentials' }));
+            }
+        } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message }));
+        }
+    });
+    } else if (req.url === '/logout' && req.method === 'POST') {
         res.writeHead(302, {
-            'Set-Cookie': 'userId=; HttpOnly; Max-Age=0',
+            'Set-Cookie': 'userId=; Max-Age=0; Path=/; HttpOnly',
             'Location': '/login.html'
         });
         res.end();
-
-    } else {
-        const filePath = './public' + pathname;
-        fs.readFile(filePath, (err, data) => {
-            if (err) {
-                res.writeHead(404);
-                res.end('File not found');
-                return;
-            }
-            const ext = path.extname(filePath).toLowerCase();
-            const mimeTypes = {
+    } else if (req.method === 'GET') {
+        const filePath = path.join(__dirname, req.url.slice(1));
+        if (fs.existsSync(filePath)) {
+            const ext = path.extname(filePath);
+            const mime = {
                 '.html': 'text/html',
                 '.css': 'text/css',
-                '.js': 'application/javascript'
-            };
-            const contentType = mimeTypes[ext] || 'application/octet-stream';
-            res.writeHead(200, { 'Content-Type': contentType });
-            res.end(data);
-        });
+                '.js': 'application/javascript',
+            }[ext] || 'text/plain';
+
+            const content = await fs.promises.readFile(filePath);
+            res.writeHead(200, { 'Content-Type': mime });
+            res.end(content);
+        }
+    } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Route not found');
     }
 }
 
