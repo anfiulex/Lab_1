@@ -12,3 +12,5 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(50) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL
 );
+
+ALTER TABLE items ADD COLUMN user_id INT NOT NULL;
