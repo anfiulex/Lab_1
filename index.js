@@ -3,6 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const mysql = require('mysql2/promise');
 const bcrypt = require('bcrypt');
+const https = require('https');
+const TELEGRAM_BOT_TOKEN = '8196436086:AAGA_XFRB54n4MMt1yeaXc6ffNH4E3N4Vwk';
+const TELEGRAM_CHAT_ID = '-4838634127';
 
 const PORT = 3000;
 
@@ -14,6 +17,43 @@ const dbConfig = {
     database: 'todolist',
 };
 
+// Функция для отправки уведомлений в Telegram
+async function notifyTelegram(action, taskInfo, userId) {
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        const [rows] = await connection.execute('SELECT username FROM users WHERE id = ?', [userId]);
+        await connection.end();
+        
+        const username = rows.length ? rows[0].username : 'Unknown';
+        let message = '';
+        
+        switch(action) {
+            case 'add':
+                message = `📝 ${username} добавил задачу: "${taskInfo.text}"`;
+                break;
+            case 'delete':
+                message = `❌ ${username} удалил задачу: "${taskInfo.text}" (ID: ${taskInfo.id})`;
+                break;
+            case 'update':
+                message = `✏️ ${username} изменил задачу:\nБыло: "${taskInfo.oldText}"\nСтало: "${taskInfo.newText}" (ID: ${taskInfo.id})`;
+                break;
+            case 'register':
+                message = `👤 Новый пользователь: ${taskInfo.username}`;
+                break;
+            case 'login':
+                message = `🔑 Пользователь ${username} вошел в систему`;
+                break;
+            default:
+                return;
+        }
+        
+        const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${TELEGRAM_CHAT_ID}&text=${encodeURIComponent(message)}`;
+        https.get(url).on('error', err => console.error('Telegram error:', err));
+    } catch (error) {
+        console.error('Error in Telegram notification:', error);
+    }
+}
+
 // --- Функции работы с задачами ---
 
 async function addListItem(text, userId) {
@@ -22,6 +62,8 @@ async function addListItem(text, userId) {
         const query = 'INSERT INTO items (text, user_id) VALUES (?, ?)';
         const [result] = await connection.execute(query, [text, userId]);
         await connection.end();
+         // Уведомление в Telegram
+        notifyTelegram('add', { text }, userId);
         return result.insertId;
     } catch (error) {
         console.error('Error adding list item:', error);
@@ -32,9 +74,17 @@ async function addListItem(text, userId) {
 async function deleteListItem(id, userId) {
     try {
         const connection = await mysql.createConnection(dbConfig);
+        
+        // Сначала получаем текст задачи для уведомления
+        const [item] = await connection.execute('SELECT text FROM items WHERE id = ? AND user_id = ?', [id, userId]);
+        if (item.length === 0) return false;
         const query = 'DELETE FROM items WHERE id = ? AND user_id = ?';
         const [result] = await connection.execute(query, [id, userId]);
         await connection.end();
+        // Уведомление в Telegram
+        if (result.affectedRows > 0) {
+            notifyTelegram('delete', { id, text: item[0].text }, userId);
+        }
         return result.affectedRows > 0;
     } catch (error) {
         console.error('Error deleting list item:', error);
@@ -45,9 +95,20 @@ async function deleteListItem(id, userId) {
 async function updateListItem(id, newText, userId) {
     try {
         const connection = await mysql.createConnection(dbConfig);
+        
+        // Сначала получаем старый текст задачи
+        const [item] = await connection.execute('SELECT text FROM items WHERE id = ? AND user_id = ?', [id, userId]);
+        if (item.length === 0) return false;
+        
         const query = 'UPDATE items SET text = ? WHERE id = ? AND user_id = ?';
         const [result] = await connection.execute(query, [newText, id, userId]);
         await connection.end();
+        
+        // Уведомление в Telegram
+        if (result.affectedRows > 0) {
+            notifyTelegram('update', { id, oldText: item[0].text, newText }, userId);
+        }
+        
         return result.affectedRows > 0;
     } catch (error) {
         console.error('Error updating item:', error);
@@ -75,6 +136,9 @@ async function registerUser(username, password) {
     const query = 'INSERT INTO users (username, password_hash) VALUES (?, ?)';
     await connection.execute(query, [username, passwordHash]);
     await connection.end();
+    
+    // Уведомление в Telegram
+    notifyTelegram('register', { username }, null);
 }
 
 // --- Аутентификация пользователя ---
@@ -88,7 +152,14 @@ async function authenticateUser(username, password) {
 
     const user = rows[0];
     const match = await bcrypt.compare(password, user.password_hash);
-    return match ? user : false;
+    
+    if (match) {
+        // Уведомление в Telegram о входе
+        notifyTelegram('login', {}, user.id);
+        return user;
+    }
+    
+    return false;
 }
 
 // --- Генерация HTML для задач ---
