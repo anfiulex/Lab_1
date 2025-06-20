@@ -12,13 +12,15 @@ const dbConfig = {
     user: 'Anfisa',
     password: 'juju2025Fisa',
     database: 'todolist',
-  };
+};
 
-  async function addListItem(text) {
+// --- Функции работы с задачами ---
+
+async function addListItem(text, userId) {
     try {
         const connection = await mysql.createConnection(dbConfig);
-        const query = 'INSERT INTO items (text) VALUES (?)';
-        const [result] = await connection.execute(query, [text]);
+        const query = 'INSERT INTO items (text, user_id) VALUES (?, ?)';
+        const [result] = await connection.execute(query, [text, userId]);
         await connection.end();
         return result.insertId;
     } catch (error) {
@@ -27,11 +29,11 @@ const dbConfig = {
     }
 }
 
-async function deleteListItem(id) {
+async function deleteListItem(id, userId) {
     try {
         const connection = await mysql.createConnection(dbConfig);
-        const query = 'DELETE FROM items WHERE id = ?';
-        const [result] = await connection.execute(query, [id]);
+        const query = 'DELETE FROM items WHERE id = ? AND user_id = ?';
+        const [result] = await connection.execute(query, [id, userId]);
         await connection.end();
         return result.affectedRows > 0;
     } catch (error) {
@@ -40,15 +42,28 @@ async function deleteListItem(id) {
     }
 }
 
-async function updateListItem(id, newText) {
+async function updateListItem(id, newText, userId) {
     try {
         const connection = await mysql.createConnection(dbConfig);
-        const query = 'UPDATE items SET text = ? WHERE id = ?';
-        const [result] = await connection.execute(query, [newText, id]);
+        const query = 'UPDATE items SET text = ? WHERE id = ? AND user_id = ?';
+        const [result] = await connection.execute(query, [newText, id, userId]);
         await connection.end();
         return result.affectedRows > 0;
     } catch (error) {
         console.error('Error updating item:', error);
+        throw error;
+    }
+}
+
+async function retrieveListItems(userId) {
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        const query = 'SELECT id, text FROM items WHERE user_id = ?';
+        const [rows] = await connection.execute(query, [userId]);
+        await connection.end();
+        return rows;
+    } catch (error) {
+        console.error('Error retrieving list items:', error);
         throw error;
     }
 }
@@ -76,32 +91,10 @@ async function authenticateUser(username, password) {
     return match ? user : false;
 }
 
-  async function retrieveListItems() {
-    try {
-      // Create a connection to the database
-      const connection = await mysql.createConnection(dbConfig);
-      
-      // Query to select all items from the database
-      const query = 'SELECT id, text FROM items';
-      
-      // Execute the query
-      const [rows] = await connection.execute(query);
-      
-      // Close the connection
-      await connection.end();
-      
-      // Return the retrieved items as a JSON array
-      return rows;
-    } catch (error) {
-      console.error('Error retrieving list items:', error);
-      throw error; // Re-throw the error
-    }
-  }
+// --- Генерация HTML для задач ---
+async function getHtmlRows(userId) {
+    const todoItems = await retrieveListItems(userId);
 
-// Stub function for generating HTML rows
-async function getHtmlRows() {
-    const todoItems = await retrieveListItems();
-    
     return todoItems.map((item, index) => `
         <tr data-id="${item.id}">
             <td>${index + 1}</td>
@@ -116,39 +109,41 @@ async function getHtmlRows() {
 
 function parseCookies(req) {
     const cookieHeader = req.headers.cookie || '';
-    return Object.fromEntries(cookieHeader.split(';').map(c => c.trim().split('=')));
+    return Object.fromEntries(
+        cookieHeader.split(';')
+            .map(c => c.trim().split('='))
+            .filter(arr => arr.length === 2)
+    );
 }
 
-// Modified request handler with template replacement
+// --- Основной обработчик ---
 async function handleRequest(req, res) {
     const cookies = parseCookies(req);
-    const isAuthenticated = cookies.userId !== undefined;
-   if (req.url === '/' && req.method === 'GET') {
-    if (!isAuthenticated) {
-        res.writeHead(302, { Location: '/login.html' });
-        res.end();
-        return;
-    }
-
-    try {
-        const html = await fs.promises.readFile(
-            path.join(__dirname, 'index.html'), 
-            'utf8'
-        );
-        
-        const processedHtml = html.replace('{{rows}}', await getHtmlRows());
-        
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(processedHtml);
-    } catch (err) {
-        console.error(err);
-        res.writeHead(500, { 'Content-Type': 'text/plain' });
-        res.end('Error loading index.html');
-    }
+    const userId = cookies.userId;
+    const isAuthenticated = userId !== undefined;
+    if (req.url === '/' && req.method === 'GET') {
+        if (!isAuthenticated) {
+            res.writeHead(302, { Location: '/login.html' });
+            res.end();
+            return;
+        }
+        try {
+            const html = await fs.promises.readFile(
+                path.join(__dirname, 'index.html'),
+                'utf8'
+            );
+            const processedHtml = html.replace('{{rows}}', await getHtmlRows(userId));
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end(processedHtml);
+        } catch (err) {
+            console.error(err);
+            res.writeHead(500, { 'Content-Type': 'text/plain' });
+            res.end('Error loading index.html');
+        }
     } else if (req.url === '/login.html' && req.method === 'GET') {
         try {
             const html = await fs.promises.readFile(
-                path.join(__dirname, 'login.html'), 
+                path.join(__dirname, 'login.html'),
                 'utf8'
             );
             res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -158,6 +153,11 @@ async function handleRequest(req, res) {
             res.end('Error loading login.html');
         }
     } else if (req.url === '/add-item' && req.method === 'POST') {
+        if (!isAuthenticated) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'Not authenticated' }));
+            return;
+        }
         let body = '';
         req.on('data', chunk => {
             body += chunk.toString();
@@ -165,7 +165,7 @@ async function handleRequest(req, res) {
         req.on('end', async () => {
             try {
                 const { text } = JSON.parse(body);
-                await addListItem(text);
+                await addListItem(text, userId);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true }));
             } catch (error) {
@@ -175,6 +175,11 @@ async function handleRequest(req, res) {
             }
         });
     } else if (req.url === '/delete-item' && req.method === 'POST') {
+        if (!isAuthenticated) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'Not authenticated' }));
+            return;
+        }
         let body = '';
         req.on('data', chunk => {
             body += chunk.toString();
@@ -182,7 +187,7 @@ async function handleRequest(req, res) {
         req.on('end', async () => {
             try {
                 const { id } = JSON.parse(body);
-                const success = await deleteListItem(id);
+                const success = await deleteListItem(id, userId);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success }));
             } catch (error) {
@@ -192,58 +197,64 @@ async function handleRequest(req, res) {
             }
         });
     } else if (req.url === '/update-item' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => {
-        body += chunk.toString();
-    });
-    req.on('end', async () => {
-        try {
-            const { id, newText } = JSON.parse(body);
-            const success = await updateListItem(id, newText);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success }));
-        } catch (error) {
-            console.error('Error updating item:', error);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: error.message }));
+        if (!isAuthenticated) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'Not authenticated' }));
+            return;
         }
-    });
-    } else if (req.url === '/register' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => body += chunk.toString());
-    req.on('end', async () => {
-        const { username, password } = JSON.parse(body);
-        try {
-            await registerUser(username, password);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true }));
-        } catch (err) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: err.message }));
-        }
-    });
-    } else if (req.url.startsWith('/login') && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => body += chunk.toString());
-    req.on('end', async () => {
-        const { username, password } = JSON.parse(body);
-        try {
-            const user = await authenticateUser(username, password);
-            if (user) {
-                res.writeHead(200, {
-                    'Content-Type': 'application/json',
-                    'Set-Cookie': `userId=${user.id}; Path=/; HttpOnly`
-                });
-                res.end(JSON.stringify({ success: true }));
-            } else {
-                res.writeHead(401, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, message: 'Invalid credentials' }));
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+        req.on('end', async () => {
+            try {
+                const { id, newText } = JSON.parse(body);
+                const success = await updateListItem(id, newText, userId);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success }));
+            } catch (error) {
+                console.error('Error updating item:', error);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: error.message }));
             }
-        } catch (err) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: err.message }));
-        }
-    });
+        });
+
+    } else if (req.url === '/register' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk.toString());
+        req.on('end', async () => {
+            const { username, password } = JSON.parse(body);
+            try {
+                await registerUser(username, password);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true }));
+            } catch (err) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err.message }));
+            }
+        });
+    } else if (req.url.startsWith('/login') && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk.toString());
+        req.on('end', async () => {
+            const { username, password } = JSON.parse(body);
+            try {
+                const user = await authenticateUser(username, password);
+                if (user) {
+                    res.writeHead(200, {
+                        'Content-Type': 'application/json',
+                        'Set-Cookie': `userId=${user.id}; Path=/; HttpOnly`
+                    });
+                    res.end(JSON.stringify({ success: true }));
+                } else {
+                    res.writeHead(401, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, message: 'Invalid credentials' }));
+                }
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err.message }));
+            }
+        });
     } else if (req.url === '/logout' && req.method === 'POST') {
         res.writeHead(302, {
             'Set-Cookie': 'userId=; Max-Age=0; Path=/; HttpOnly',
