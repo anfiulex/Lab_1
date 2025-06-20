@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const url = require('url'); // <-- добавь эту строку
 const mysql = require('mysql2/promise');
 const bcrypt = require('bcrypt');
 
